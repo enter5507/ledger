@@ -92,6 +92,25 @@ input,select{border-radius:12px}
 .ov .ar .sec{grid-column:1/-1;font-size:12px;color:var(--mute);margin-top:1px;font-variant-numeric:tabular-nums}
 .ov .ar .sec b{font-weight:600;color:var(--ink)}
 .ov .ar .sec b.neg{color:var(--exp)}
+.ov .ucap{font-size:12px;color:var(--mute);margin:8px 0 0}
+.ov .ar.u{padding:7px 0 7px 12px;border-top:1px dashed var(--line)}
+.ov .ar.u .nm,.ov .ar.u .v{font-size:14px;font-weight:400}
+.ov .ulink{display:block;margin:6px 0 4px;font-size:13px}
+.split{margin:8px 0 2px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.split .sph{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.split .sph .sub{font-size:12px}
+.spl{display:grid;grid-template-columns:minmax(0,1fr) 7em 36px;gap:6px;margin-bottom:6px}
+.spl input{min-width:0}
+.spl .x{border:0;background:none;color:var(--mute);font-size:22px;line-height:1}
+.split .btn{padding:8px 12px;font-size:14px}
+.h2s{display:flex;justify-content:space-between;align-items:baseline}
+.h2s .link{font-size:13px;font-weight:400}
+.row.srt{cursor:default}
+.mv{display:flex;gap:8px}
+.mv button{width:44px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}
+.amt.ppu,.amt.ovp,.amt.ovo{color:var(--mute)}
+.chk{display:flex;align-items:center;gap:8px;margin:10px 0 2px;font-size:15px}
+.chk input{width:20px;height:20px;margin:0}
 .pick{margin-bottom:2px}
 .pg{font-size:12px;color:var(--mute);margin:8px 0 4px;letter-spacing:.08em}
 .pk{display:grid;grid-template-columns:1fr 1fr;gap:6px}
@@ -135,6 +154,10 @@ const pad=n=>String(n).padStart(2,'0');
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`};
 let ym=today().slice(0,7);
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+let curDetail=null,retTo=null,splits=[],ppOn=false,sortSec='';
+function doneForm(){const r=retTo;closeSheet();if(r)setTimeout(r,0)}
+function delRec(id){const r=S.records.find(x=>x.id===id);if(!r)return;S.records=r.grp?S.records.filter(x=>x.grp!==r.grp):S.records.filter(x=>x.id!==id)}
+const rcur=v=>v.cur||(acc(v.acc)||{}).cur||'TWD';
 const r2=n=>Math.round(n*100)/100;
 const num=n=>n.toLocaleString('zh-TW',{maximumFractionDigits:2});
 const money=(n,c)=>`${c} ${num(n)}`;
@@ -147,7 +170,7 @@ const ukey=id=>'ledger-u-'+id,mkey=id=>'ledger-u-'+id+'-meta';
 const same=(a,b)=>!!a&&!!b&&new Date(a).getTime()===new Date(b).getTime();
 const isAuthErr=e=>!!e&&(e.status===401||/jwt|not authenticated/i.test(e.message||''));
 function readLS(k){try{const r=localStorage.getItem(k);return r?JSON.parse(r):null}catch(e){storeOK=false;return null}}
-function norm(){S.accounts=S.accounts||[];S.records=S.records||[];S.budgets=S.budgets||[];S.cards=S.cards||[];S.reserves=S.reserves||[];S.settled=S.settled||{};S.rates=S.rates||{}}
+function norm(){S.accounts=S.accounts||[];S.records=S.records||[];S.budgets=S.budgets||[];S.cards=S.cards||[];S.reserves=S.reserves||[];S.settled=S.settled||{};S.rates=S.rates||{};S.prepaid=S.prepaid||[];S.advOrder=S.advOrder||[]}
 const meta=()=>(user&&readLS(mkey(user.id)))||{ts:null,dirty:false};
 function setMeta(m){try{localStorage.setItem(mkey(user.id),JSON.stringify(m))}catch(e){}}
 const hasData=d=>!!d&&((d.accounts||[]).length>0||(d.records||[]).length>0);
@@ -370,7 +393,7 @@ function bstat(b,y){
   if(y<b.start)return null;
   const base=baseFor(b,y),adj=r2(b.adj.filter(x=>x.date.slice(0,7)===y).reduce((s,x)=>s+x.amt,0));
   const p=bstat(b,prevYM(y)),carry=p?Math.min(0,p.left):0;
-  const spent=r2(S.records.filter(r=>r.type==='out'&&r.bud===b.id&&r.date.slice(0,7)===y).reduce((s,r)=>s+r.amt*(r.rate||1),0));
+  const spent=r2(S.records.filter(r=>(r.type==='out'||r.type==='advi'||r.type==='ppu')&&r.bud===b.id&&r.date.slice(0,7)===y).reduce((s,r)=>s+r.amt*(r.rate||1),0));
   return {base,adj,carry,spent,left:r2(base+adj+carry-spent)};
 }
 const bn=r=>{const b=S.budgets.find(x=>x.id===r.bud);return b?`，預算：${esc(b.name)}`:''};
@@ -394,58 +417,101 @@ function render(){
     const due=r2(S.cards.filter(c=>c.acc===a.id).reduce((s,c)=>s+Math.max(0,cinfo(c).out),0));const res=resAt(a.id,en);return {a,open,end,due,res};
   });
   S.records.forEach(r=>{if(r.card&&r.type==='out'&&r.date>=st&&r.date<=en){const cc=(S.cards.find(c=>c.id===r.card)||{}).cur||'TWD';if(tot[cc])tot[cc].mo=r2(tot[cc].mo+r.amt)}});
+  S.records.forEach(r=>{if(r.type==='advi'&&r.bud&&r.date>=st&&r.date<=en&&tot[r.cur])tot[r.cur].mo=r2(tot[r.cur].mo+r.amt)});
   let h=`<div class="card"><h2>所有帳戶合計</h2>`+Object.keys(tot).map(c=>{const t=tot[c];
     return `<div class="cur"><span class="code">${c}</span><span class="big">${num(r2(t.end))}</span><div class="sub">本月收入 <span class="in">+${num(r2(t.mi))}</span>　本月支出（含刷卡） <span class="out">−${num(r2(t.mo))}</span></div></div>`}).join('')+`</div>`;
   h+=`<div class="card"><h2>各帳戶剩餘</h2>`+rows.map(x=>`<button class="row" data-a="accd" data-id="${x.a.id}"><div><b>${esc(x.a.name)}</b><small>期初 ${money(x.open,x.a.cur)}${x.due||x.res?`　應有 ${num(r2(x.due+x.res))}　盈餘 ${num(r2(x.end-x.due-x.res))}`:''}</small></div><div class="amt">${money(x.end,x.a.cur)}</div></button>`).join('')+`<button class="link" data-a="accs">管理帳戶</button></div>`;
   h=ovHtml(rows,tot);
-  h+=`<div class="card"><h2>信用卡</h2>`+(S.cards.length?S.cards.map(c=>{const i=cinfo(c),d=c.pay?nd(c.pay):null;return `<button class="row" data-a="card" data-id="${c.id}"><div><b>${esc(c.name)}</b><small>上期 ${num(i.prevT)}　當期 ${num(i.curT)}${d!==null?`　<span class="${d<=3?'out':''}">${d===0?'今天繳費':d+' 天後繳費'}</span>`:''}</small></div><div class="amt">${num(i.out)} <small style="display:inline">${c.cur||'TWD'}</small></div></button>`}).join(''):`<p class="sub" style="margin:0 0 8px">還沒有信用卡。刷卡不會馬上扣帳戶，繳款時才扣。</p>`)+`<button class="link" data-a="cnew">新增信用卡</button></div>`;
-  const av=advSum().filter(o=>o.v!==0);
+  h+=`<div class="card"><h2 class="h2s">信用卡${sortBtn('card',S.cards.length)}</h2>`+(S.cards.length?S.cards.map(c=>{const i=cinfo(c),d=c.pay?nd(c.pay):null;if(sortSec==='card')return srtRow(esc(c.name),'card',c.id);return `<button class="row" data-a="card" data-id="${c.id}"><div><b>${esc(c.name)}</b><small>上期 ${num(i.prevT)}　當期 ${num(i.curT)}${d!==null?`　<span class="${d<=3?'out':''}">${d===0?'今天繳費':d+' 天後繳費'}</span>`:''}</small></div><div class="amt">${num(i.out)} <small style="display:inline">${c.cur||'TWD'}</small></div></button>`}).join(''):`<p class="sub" style="margin:0 0 8px">還沒有信用卡。刷卡不會馬上扣帳戶，繳款時才扣。</p>`)+`<button class="link" data-a="cnew">新增信用卡</button></div>`;
+  const av=advList();
   if(av.length){const tm={},ti={};av.forEach(o=>{if(o.v>0)tm[o.cur]=r2((tm[o.cur]||0)+o.v);else ti[o.cur]=r2((ti[o.cur]||0)-o.v)});
-    h+=`<div class="card"><h2>代墊</h2><p class="sub" style="margin:0 0 6px">${Object.keys(tm).map(c=>`別人欠我 ${c} ${num(tm[c])}`).concat(Object.keys(ti).map(c=>`我欠別人 ${c} ${num(ti[c])}`)).join('；')}</p>`+av.map(o=>`<button class="row" data-a="adv" data-w="${esc(o.who)}" data-c="${o.cur}"><div><b>${esc(o.who)}</b><small>${o.v>0?'欠我':'我欠'}</small></div><div class="amt ${o.v>0?'in':'out'}">${o.cur} ${num(Math.abs(o.v))}</div></button>`).join('')+`</div>`}
+    h+=`<div class="card"><h2 class="h2s">代墊${sortBtn('adv',av.length)}</h2><p class="sub" style="margin:0 0 6px">${Object.keys(tm).map(c=>`別人欠我 ${c} ${num(tm[c])}`).concat(Object.keys(ti).map(c=>`我欠別人 ${c} ${num(ti[c])}`)).join('；')}</p>`+av.map(o=>sortSec==='adv'?srtRow(esc(o.who)+' <small style="display:inline">'+o.cur+'</small>','adv',esc(o.who+'|'+o.cur)):`<button class="row" data-a="adv" data-w="${esc(o.who)}" data-c="${o.cur}"><div><b>${esc(o.who)}</b><small>${o.v>0?'欠我':'我欠'}</small></div><div class="amt ${o.v>0?'in':'out'}">${o.cur} ${num(Math.abs(o.v))}</div></button>`).join('')+`</div>`}
+  if(S.prepaid.length)h+=`<div class="card"><h2>預付款</h2>`+S.prepaid.map(p=>`<button class="row" data-a="pp" data-id="${p.id}"><div><b>${esc(p.name)}</b><small>原付 ${money(p.amt,p.cur)}　已使用 ${money(ppUsed(p),p.cur)}</small></div><div class="amt">${money(ppLeft(p),p.cur)}</div></button>`).join('')+`</div>`;
   const act=S.budgets.filter(b=>b.start<=ym);
-  h+=`<div class="card"><h2>預算剩餘</h2>`+(act.length?act.map(b=>{const s=bstat(b,ym);return `<button class="row" data-a="bud" data-id="${b.id}"><div><b>${esc(b.name)}</b><small>本月 ${num(r2(s.base+s.adj+s.carry))}${s.carry?`（含上月超支 ${num(-s.carry)}）`:''}　已花 ${num(s.spent)}</small></div><div class="amt ${s.left<0?'out':''}">${num(s.left)}</div></button>`}).join(''):`<p class="sub" style="margin:0 0 8px">還沒有預算，例如「餐費 3000」。</p>`)+`<button class="link" data-a="bnew">新增預算</button>　<button class="link" data-a="msettle">月底結算</button></div>`;
+  h+=`<div class="card"><h2 class="h2s">預算剩餘${sortBtn('bud',act.length)}</h2>`+(act.length?act.map(b=>{const s=bstat(b,ym);if(sortSec==='bud')return srtRow(esc(b.name),'bud',b.id);return `<button class="row" data-a="bud" data-id="${b.id}"><div><b>${esc(b.name)}</b><small>本月 ${num(r2(s.base+s.adj+s.carry))}${s.carry?`（含上月超支 ${num(-s.carry)}）`:''}　已花 ${num(s.spent)}</small></div><div class="amt ${s.left<0?'out':''}">${num(s.left)}</div></button>`}).join(''):`<p class="sub" style="margin:0 0 8px">還沒有預算，例如「餐費 3000」。</p>`)+`<button class="link" data-a="bnew">新增預算</button>　<button class="link" data-a="msettle">月底結算</button></div>`;
   const recs=S.records.filter(r=>r.date>=st&&r.date<=en).sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));
   h+=`<h2 class="day" style="margin-top:20px">本月記錄</h2>`;
   if(!recs.length)h+=`<div class="card sub">這個月還沒有記錄。按右下角「記一筆」開始。</div>`;
-  let last='';
+  let last='';const gSeen=new Set();
   recs.forEach(r=>{
     if(r.date!==last){last=r.date;const [yy,mm,dd]=r.date.split('-');
       h+=`<div class="day">${new Date(+yy,mm-1,+dd).toLocaleDateString('zh-TW',{month:'long',day:'numeric',weekday:'short'})}</div>`}
+    if(r.grp){if(gSeen.has(r.grp))return;gSeen.add(r.grp);h+=grpRow(r);return}
     const a=acc(r.acc),cd=S.cards.find(c=>c.id===r.card);
-    h+=`<div class="sw"><button class="del" data-a="swdel" data-id="${r.id}">刪除</button><div class="card" style="padding:0 16px"><button class="row" data-a="edit" data-id="${r.id}"><div><b>${esc(r.item)}</b><small>${r.type==='xfer'?esc(a?a.name:'?')+' → '+esc((acc(r.to)||{name:'?'}).name):r.type==='advi'?'他人代墊，不動帳戶':a?esc(a.name):cd?'信用卡 '+esc(cd.name):'已刪除的帳戶'}${bn(r)}</small></div><div class="amt ${r.type}">${sg(r)}${num(r.amt)} <small style="display:inline">${a?a.cur:cd?(cd.cur||'TWD'):(r.cur||'')}</small></div></button></div></div>`;
+    h+=`<div class="sw"><button class="del" data-a="swdel" data-id="${r.id}">刪除</button><div class="card" style="padding:0 16px"><button class="row" data-a="edit" data-id="${r.id}"><div><b>${esc(r.item)}</b><small>${r.type==='xfer'?esc(a?a.name:'?')+' → '+esc((acc(r.to)||{name:'?'}).name):r.type==='advi'?'他人代墊，不動帳戶':r.type==='ppu'?'預付款使用，不動帳戶':r.type==='ovo'?'抵扣卡費，不動帳戶':a?esc(a.name):cd?'信用卡 '+esc(cd.name):'已刪除的帳戶'}${bn(r)}</small></div><div class="amt ${r.type}">${sg(r)}${num(r.amt)} <small style="display:inline">${a?a.cur:cd?(cd.cur||'TWD'):(r.cur||'')}</small></div></button></div></div>`;
   });
   $('#view').innerHTML=h;
 }
 
 function openSheet(html,lock){$('#sheet').dataset.lock=lock?'1':'';$('#sheet').innerHTML=html;$('#sheet').hidden=false;$('#scrim').hidden=false}
-function closeSheet(){$('#sheet').hidden=true;$('#scrim').hidden=true;render();if(pending)setTimeout(showPending,0)}
+function closeSheet(){curDetail=null;retTo=null;$('#sheet').hidden=true;$('#scrim').hidden=true;render();if(pending)setTimeout(showPending,0)}
 
 let curRsv='',recRate='';
 function recSheet(id,pre){
   if(!S.accounts.some(a=>!a.hidden)){accSheet();return}
-  const r=id?S.records.find(x=>x.id===id):null;
-  kind=r?r.type:'out';
+  let r=id?S.records.find(x=>x.id===id):null,gTotal=null,gOth=[];
+  if(r&&r.grp){const gr=S.records.filter(x=>x.grp===r.grp),own=gr.find(x=>x.type==='out');gOth=gr.filter(x=>x.type==='advo').map(x=>({who:x.who,amt:x.amt}));gTotal=r2(gr.reduce((s,x)=>s+x.amt,0));r=own||Object.assign({},gr[0],{type:'out',item:gr[0].gi||'',bud:'',rsv:''})}
+  kind=r?r.type:'out';ppOn=!!(r&&r.ppid&&!r.grp);
   const lr=S.records[S.records.length-1],lastAcc=r?(r.acc||r.card):(lr?(lr.acc||lr.card):'');
   openSheet(`<h3>${r?'修改記錄':'記一筆'}</h3>
   <div class="seg"><button data-k="out" aria-pressed="${kind==='out'}">支出</button><button data-k="in" aria-pressed="${kind==='in'}">收入</button></div>${r||pre?'':`<div class="acts" style="margin:-4px 0 8px"><button class="btn alt" data-a="xnew">轉帳／換匯</button><button class="btn alt" data-a="anew">代墊</button></div>`}
-  <label for="f-amt">金額</label><input class="money" id="f-amt" inputmode="decimal" placeholder="0" value="${r?r.amt:''}">
+  <label for="f-amt">金額</label><input class="money" id="f-amt" inputmode="decimal" placeholder="0" value="${r?(gTotal!==null?gTotal:r.amt):''}">
   <label for="f-item">項目</label><input id="f-item" placeholder="例如：泡麵、薪水" value="${r?esc(r.item):''}">
+  <div id="split-wrap"></div><div id="pp-wrap"></div>
   <label>帳戶</label><select id="f-acc" hidden></select><div id="f-acc-pick"></div>
   <div id="per-wrap"></div><div id="bud-wrap"></div><label for="f-date">日期</label><input type="date" id="f-date" value="${r?r.date:today()}">
   <div class="err" id="err"></div>
   <div class="acts"><button class="btn alt" data-a="close">取消</button>${r?`<button class="btn danger" data-a="delrec" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="saverec" data-id="${r?r.id:''}">儲存</button></div>`);
-  perInit=r?(r.per||0):0;curRsv=r?(r.rsv||''):(pre?pre.rsv:'');recRate=r&&r.rate?r.rate:'';fillAcc(pre?pre.acc:lastAcc);fillBud(r?r.bud||'':'');if(pre){$('#f-amt').value=pre.amt;$('#f-item').value=pre.item}
+  perInit=r?(r.per||0):0;curRsv=r?(r.rsv||''):(pre?pre.rsv:'');recRate=r&&r.rate?r.rate:'';fillAcc(pre?pre.acc:lastAcc);fillBud(r?r.bud||'':'');if(pre){$('#f-amt').value=pre.amt;$('#f-item').value=pre.item}splits=gOth;{const sw=$('#split-wrap');if(sw)sw.innerHTML=splitHtml();const pw=$('#pp-wrap');if(pw)pw.innerHTML=ppHtml()}
   setTimeout(()=>{if(!r)$('#f-amt').focus()},50);
 }
+function totalAmt(){const el=$('#f-amt');return el?(parseFloat(String(el.value).replace(/,/g,''))||0):0}
+function splitSum(){return r2(splits.reduce((s,x)=>s+(parseFloat(String(x.amt).replace(/,/g,''))||0),0))}
+function ownTxt(){const o=r2(totalAmt()-splitSum());return o<0?`<span class="out">代墊合計超過總金額</span>`:`自己的支出 <b>${num(o)}</b>（只有這一份會算進預算）`}
+function splitHtml(){
+  if(kind!=='out'||curRsv||ppOn)return '';
+  const names=[...new Set(S.records.filter(x=>x.who).map(x=>x.who))];
+  return `<div class="split"><div class="sph"><b>幫別人付</b><span class="sub">這筆錢有替別人付，就在這裡加</span></div>`+splits.map((x,i)=>`<div class="spl"><input list="sp-names" data-sp="${i}" data-f="who" placeholder="對象" value="${esc(x.who)}"><input class="money" inputmode="decimal" data-sp="${i}" data-f="amt" placeholder="金額" value="${x.amt}"><button type="button" class="x" data-a="spdel" data-id="${i}" aria-label="移除">×</button></div>`).join('')+`<datalist id="sp-names">${names.map(n=>`<option value="${esc(n)}">`).join('')}</datalist><div class="acts" style="margin:6px 0 2px"><button type="button" class="btn alt" data-a="spadd">＋ 幫別人付</button>${splits.length?`<button type="button" class="btn alt" data-a="speq">平均分攤</button>`:''}</div>${splits.length?`<div class="sub" id="sp-own" style="margin-top:6px">${ownTxt()}</div>`:''}</div>`}
+function grpRow(r){const gr=S.records.filter(x=>x.grp===r.grp),own=gr.find(x=>x.type==='out'),oth=gr.filter(x=>x.type==='advo'),tot=r2(gr.reduce((s,x)=>s+x.amt,0)),a=acc(r.acc),cd=S.cards.find(c=>c.id===r.card),cu=a?a.cur:cd?(cd.cur||'TWD'):(r.cur||''),anchor=own||oth[0],parts=[own?`自己 ${num(own.amt)}`:'',...oth.map(x=>`${esc(x.who)} ${num(x.amt)}`)].filter(Boolean).join('、');
+  return `<div class="sw"><button class="del" data-a="swdel" data-id="${anchor.id}">刪除</button><div class="card" style="padding:0 16px"><button class="row" data-a="edit" data-id="${anchor.id}"><div><b>${esc(r.gi||anchor.item)}</b><small>${a?esc(a.name):cd?'信用卡 '+esc(cd.name):'已刪除的帳戶'}${own?bn(own):''}<br>${parts}</small></div><div class="amt out">−${num(tot)} <small style="display:inline">${cu}</small></div></button></div></div>`}
 function saveRec(id,t){
   const amt=r2(parseFloat($('#f-amt').value.replace(/,/g,''))),item=$('#f-item').value.trim(),accId=$('#f-acc').value,date=$('#f-date').value||today(),bud=kind==='out'&&$('#f-bud')?$('#f-bud').value:'',isCard=S.cards.some(c=>c.id===accId),per=isCard&&$('#f-per')?+$('#f-per').value:0,rate=bud&&curOf(accId)!=='TWD'&&$('#f-rate')?Math.round(parseFloat($('#f-rate').value)*1e6)/1e6:0;
   const e=!(amt>0)?'請輸入大於 0 的金額。':!item?'請輸入項目。':!accId?'請選擇帳戶。':'';
   if(e){$('#err').textContent=e;return}
+  const sp=kind==='out'&&!curRsv?splits.map(x=>({who:String(x.who||'').trim(),amt:r2(parseFloat(String(x.amt).replace(/,/g,'')))})).filter(x=>x.who||x.amt>0):[];
+  if(sp.some(x=>!x.who)){$('#err').textContent='請輸入每位對象的名字。';return}
+  if(sp.some(x=>!(x.amt>0))){$('#err').textContent='請輸入每位代墊的金額。';return}
+  const spSum=r2(sp.reduce((s,x)=>s+x.amt,0)),own=r2(amt-spSum);
+  if(own<0){$('#err').textContent='代墊合計不能超過總金額。';return}
+  const ppFlag=ppOn&&kind==='out'&&!curRsv&&!sp.length;
+  {const op=id?S.records.find(x=>x.id===id):null,pi=op&&op.ppid?S.prepaid.find(x=>x.id===op.ppid):null;
+   if(pi){const used=ppUsed(pi);
+     if(sp.length){$('#err').textContent='預付款不能同時分攤給別人，請先取消預付款。';return}
+     if(!ppFlag&&used>0){$('#err').textContent='這筆預付款已經有使用記錄，不能取消預付。';return}
+     if(ppFlag&&amt<used){$('#err').textContent=`金額不能低於已使用的 ${num(used)}。`;return}}}
   if(bud&&curOf(accId)!=='TWD'&&!(rate>0)){$('#err').textContent='外幣支出要算進預算，請輸入匯率。';return}
   const od=id?S.records.find(x=>x.id===id).date:date;if(pastGuard(t,od<date?od:date))return;
-  if(id){Object.assign(S.records.find(x=>x.id===id),{type:kind,amt,item,acc:isCard?'':accId,card:isCard?accId:'',date,bud,per,rsv:curRsv,rate})}
-  else S.records.push({id:uid(),type:kind,amt,item,acc:isCard?'':accId,card:isCard?accId:'',date,bud,per,rsv:curRsv,rate});
-  if(rate>0)S.rates[curOf(accId)]=rate;save();ym=date.slice(0,7);closeSheet();
+  const old=id?S.records.find(x=>x.id===id):null;
+  if(!sp.length&&!(old&&old.grp)){
+    let rec;
+    if(id){rec=S.records.find(x=>x.id===id);Object.assign(rec,{type:kind,amt,item,acc:isCard?'':accId,card:isCard?accId:'',date,bud,per,rsv:curRsv,rate})}
+    else{rec={id:uid(),type:kind,amt,item,acc:isCard?'':accId,card:isCard?accId:'',date,bud,per,rsv:curRsv,rate};S.records.push(rec)}
+    ppApply(rec,ppFlag,item,amt,curOf(accId),date);
+  }else{
+    const g=old&&old.grp?old.grp:uid(),ob=old&&old.grp?S.records.find(x=>x.grp===old.grp&&x.type==='out'):old,ownId=ob?ob.id:null;
+    S.records=S.records.filter(x=>x.grp!==g||x.id===ownId);
+    const base={acc:isCard?'':accId,card:isCard?accId:'',date,per};
+    if(!sp.length){
+      const o=ownId?S.records.find(x=>x.id===ownId):null,rec={type:kind,amt,item,...base,bud,rsv:curRsv,rate};
+      if(o){Object.assign(o,rec);delete o.grp;delete o.gi}else S.records.push({id:uid(),...rec});
+    }else{
+      const cu=curOf(accId),ownBud=own>0?bud:'';
+      if(own>0){const rec={type:'out',amt:own,item,...base,bud:ownBud,rsv:'',rate:ownBud?rate:0,grp:g,gi:item};if(ownId)Object.assign(S.records.find(x=>x.id===ownId),rec);else S.records.push({id:uid(),...rec})}
+      else if(ownId)S.records=S.records.filter(x=>x.id!==ownId);
+      sp.forEach(x=>S.records.push({id:uid(),type:'advo',amt:x.amt,who:x.who,cur:cu,item:`代墊給 ${x.who}：${item}`,note:item,...base,bud:'',rate:0,grp:g,gi:item}));
+    }
+  }
+  if(rate>0)S.rates[curOf(accId)]=rate;save();ym=date.slice(0,7);doneForm();
 }
 
 function accSheet(){
@@ -482,6 +548,7 @@ function addAcc(){
 function fillBud(sel){
   const pw=$('#per-wrap');if(pw){const isC=kind==='out'&&S.cards.some(c=>c.id===$('#f-acc').value),pv=$('#f-per')?$('#f-per').value:String(perInit);pw.innerHTML=isC?`<label for="f-per">帳期</label><select id="f-per"><option value="0">依日期自動</option><option value="-1" ${pv==='-1'?'selected':''}>改算上一期</option><option value="1" ${pv==='1'?'selected':''}>改算下一期</option></select>`:''}
   const w=$('#bud-wrap');if(!w)return;
+  if(ppOn){w.innerHTML='';return}
   const cc=curOf($('#f-acc').value),curRate=$('#f-rate')?$('#f-rate').value:(recRate||''),mo=($('#f-date').value||today()).slice(0,7);
   const list=S.budgets.filter(b=>b.start<=mo);
   if(kind!=='out'||!list.length){w.innerHTML='';return}
@@ -489,7 +556,8 @@ function fillBud(sel){
   const cur=sel!==undefined?sel:($('#f-bud')?$('#f-bud').value:'');
   w.innerHTML=`<label for="f-bud">預算</label><select id="f-bud"><option value="">無預算</option>${list.map(b=>`<option value="${b.id}" ${b.id===cur?'selected':''}>${esc(b.name)}</option>`).join('')}</select>${cc!=='TWD'?`<label for="f-rate">匯率（1 ${cc} = ? TWD，選了預算才會用到）</label><input id="f-rate" inputmode="decimal" value="${curRate||S.rates[cc]||''}">`:''}`;
 }
-document.addEventListener('change',e=>{if(e.target.id==='f-acc'||e.target.id==='f-date')fillBud()});
+function refreshExtras(){const sw=$('#split-wrap'),pw=$('#pp-wrap');if(sw)sw.innerHTML=splitHtml();if(pw)pw.innerHTML=ppHtml();fillBud()}
+document.addEventListener('change',e=>{const i=e.target.id;if(i==='f-acc'||i==='f-date')fillBud();else if(i==='ad-acc')fillAdPer();else if(i==='f-pp'){ppOn=!!e.target.checked;refreshExtras()}});
 function bNew(){openSheet(`<h3>新增預算</h3><label for="b-name">預算名稱</label><input id="b-name" placeholder="例如：餐費"><label for="b-amt">每月預算金額（TWD）</label><input id="b-amt" inputmode="decimal" placeholder="3000"><label for="b-start">開始月份</label><input type="month" id="b-start" value="${ym}"><p class="sub">之後每個月預設沿用這個金額，可以隨時調整。如果開始月份早於本月，建立後會立刻跳出結算。</p><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="close">取消</button><button class="btn" data-a="bsave">建立</button></div>`)}
 function bSave(){const name=$('#b-name').value.trim(),v=r2(parseFloat($('#b-amt').value.replace(/,/g,'')));
   if(!name){$('#err').textContent='請輸入預算名稱。';return}
@@ -542,19 +610,25 @@ function cinfo(c){
   const cur=nextClose(c,today()),prev=prevClose(c,cur),rs=S.records.filter(r=>r.card===c.id&&(r.type==='out'||r.type==='advo'));
   const tot=k=>r2(rs.filter(r=>eff(c,r)===k).reduce((s,r)=>s+r.amt,0));
   const paid=r2(S.records.filter(r=>r.card===c.id&&r.type==='pay').reduce((s,r)=>s+r.amt,0));
-  const rw=r2(Object.values(c.rew).reduce((s,v)=>s+v,0));
-  return {cur,prev,nxt:nxtClose(c,cur),nxtT:r2(tot(nxtClose(c,cur))-(c.rew[nxtClose(c,cur)]||0)),paid,curT:r2(tot(cur)-(c.rew[cur]||0)),prevT:r2(tot(prev)-(c.rew[prev]||0)),out:r2(rs.reduce((s,r)=>s+r.amt,0)-rw-paid)};
+  const ovp=r2(S.records.filter(r=>r.card===c.id&&r.type==='ovp').reduce((s,r)=>s+r.amt,0)),ovo=r2(S.records.filter(r=>r.card===c.id&&r.type==='ovo').reduce((s,r)=>s+r.amt,0));
+  const offK=k=>r2(S.records.filter(r=>r.card===c.id&&r.type==='ovo'&&r.stm===k).reduce((s,r)=>s+r.amt,0));
+  const rw=r2(Object.values(c.rew).reduce((s,v)=>s+v,0)),nx=nxtClose(c,cur);
+  return {cur,prev,nxt:nx,nxtT:r2(tot(nx)-(c.rew[nx]||0)-offK(nx)),paid,curT:r2(tot(cur)-(c.rew[cur]||0)-offK(cur)),prevT:r2(tot(prev)-(c.rew[prev]||0)-offK(prev)),out:r2(rs.reduce((s,r)=>s+r.amt,0)-rw-paid-ovo),ov:r2(ovp-ovo)};
 }
 function stmtHtml(c,k,label,w,tot){
-  const rs=S.records.filter(r=>r.card===c.id&&(r.type==='out'||r.type==='advo')&&eff(c,r)===k).sort((a,b)=>b.date.localeCompare(a.date));
+  const rs=S.records.filter(r=>r.card===c.id&&(r.type==='out'||r.type==='advo')&&eff(c,r)===k).sort((a,b)=>b.date.localeCompare(a.date)),os=S.records.filter(r=>r.card===c.id&&r.type==='ovo'&&r.stm===k);
   const sum=r2(rs.reduce((s,r)=>s+r.amt,0));
-  return `<h3 style="margin-top:18px">${label}　${md(ad(prevClose(c,k)))}～${md(k)}</h3>`+(rs.length?rs.map(r=>`<button class="row" data-a="edit" data-id="${r.id}"><div><b>${esc(r.item)}</b><small>${r.date}${r.per===-1?'，改算上一期':r.per===1?'，改算下一期':''}</small></div><div class="amt">${num(r.amt)}</div></button>`).join(''):`<p class="sub">沒有刷卡記錄。</p>`)+`<div class="row"><b>刷卡小計</b><span class="amt">${num(sum)}</span></div><label for="rw-${w}">回饋折抵金額（從卡費扣掉）</label><div class="acts" style="margin-top:0"><input id="rw-${w}" inputmode="decimal" value="${c.rew[k]||''}" placeholder="0"><button class="btn alt" style="flex:0 0 auto" data-a="rew" data-id="${c.id}" data-ck="${k}" data-w="${w}">儲存</button></div><div class="row"><b>${label}卡費</b><span class="amt">${num(tot)}</span></div>`;
+  return `<h3 style="margin-top:18px">${label}　${md(ad(prevClose(c,k)))}～${md(k)}</h3>`+(rs.length?rs.map(r=>`<button class="row" data-a="edit" data-id="${r.id}"><div><b>${esc(r.item)}</b><small>${r.date}${r.per===-1?'，改算上一期':r.per===1?'，改算下一期':''}</small></div><div class="amt">${num(r.amt)}</div></button>`).join(''):`<p class="sub">沒有刷卡記錄。</p>`)+`<div class="row"><b>刷卡小計</b><span class="amt">${num(sum)}</span></div><label for="rw-${w}">回饋折抵金額（從卡費扣掉）</label><div class="acts" style="margin-top:0"><input id="rw-${w}" inputmode="decimal" value="${c.rew[k]||''}" placeholder="0"><button class="btn alt" style="flex:0 0 auto" data-a="rew" data-id="${c.id}" data-ck="${k}" data-w="${w}">儲存</button></div>`+os.map(r=>`<button class="row" data-a="edit" data-id="${r.id}"><div><b>多付餘額抵扣</b><small>${r.date}</small></div><div class="amt">−${num(r.amt)}</div></button>`).join('')+`<div class="row"><b>${label}卡費</b><span class="amt">${num(tot)}</span></div>`;
 }
-function cardSheet(id){const c=S.cards.find(x=>x.id===id),i=cinfo(c),a=acc(c.acc);
+function ovBlock(c,i){const rs=S.records.filter(r=>r.card===c.id&&(r.type==='ovp'||r.type==='ovo')).sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));
+  const lab=k=>k===i.prev?'上期':k===i.cur?'當期':k===i.nxt?'下期':md(k)+' 結帳的那期';
+  return `<h3 style="margin-top:18px">多付餘額</h3><div class="row"><b>目前餘額</b><span class="amt">${num(i.ov)}</span></div>`+rs.map(r=>`<button class="row" data-a="edit" data-id="${r.id}"><div><b>${r.type==='ovp'?'多付':'抵扣卡費'}</b><small>${r.date}${r.type==='ovo'?'，'+lab(r.stm):''}</small></div><div class="amt">${r.type==='ovp'?'+':'−'}${num(r.amt)}</div></button>`).join('')+(i.ov>0?`<div class="acts"><button class="btn" data-a="ovoff" data-id="${c.id}">抵扣卡費</button></div>`:'')}
+function cardSheet(id){const c=S.cards.find(x=>x.id===id),i=cinfo(c),a=acc(c.acc);curDetail=()=>cardSheet(id);
   openSheet(`<h3>${esc(c.name)}${c.type?`（${esc(c.type)}）`:''}</h3>
   <p class="sub">每月 ${c.close} 日結帳${c.pay?`，${c.pay} 日繳費`:''}。代扣繳帳戶：${a?esc(a.name):'未綁定'}</p>
   <div class="row"><b>未繳總計</b><span class="amt ${i.out>0?'out':''}">${num(i.out)}</span></div><p class="sub" style="margin:0">已繳款合計 ${num(i.paid)}</p>
-  <div class="acts"><button class="btn" data-a="pay" data-id="${id}">繳款</button><button class="btn alt" data-a="cedit" data-id="${id}">設定</button></div>`
+  <div class="acts"><button class="btn" data-a="pay" data-id="${id}">繳款</button><button class="btn alt" data-a="ovnew" data-id="${id}">多付</button><button class="btn alt" data-a="cedit" data-id="${id}">設定</button></div>`
+  +(S.records.some(r=>r.card===id&&(r.type==='ovp'||r.type==='ovo'))?ovBlock(c,i):'')
   +stmtHtml(c,i.prev,'上期','prev',i.prevT)+stmtHtml(c,i.cur,'當期','cur',i.curT)+(S.records.some(r=>r.card===c.id&&(r.type==='out'||r.type==='advo')&&eff(c,r)===i.nxt)?stmtHtml(c,i.nxt,'下期','nxt',i.nxtT):'')
   +`<div class="acts"><button class="btn alt" data-a="close">關閉</button></div>`);}
 function cardForm(id){const c=id?S.cards.find(x=>x.id===id):{name:'',type:'',close:'',pay:'',acc:''};
@@ -567,16 +641,42 @@ function cSave(id){const name=$('#c-name').value.trim(),type=$('#c-type').value.
   if(S.cards.some(c=>c.name===name&&c.id!==id)){$('#err').textContent='已經有同名的信用卡。';return}
   if(id)Object.assign(S.cards.find(x=>x.id===id),{name,type,close,pay,acc:accId});else S.cards.push({id:uid(),name,type,close,pay,acc:accId,rew:{},cur:cur0});
   save();id?cardSheet(id):closeSheet()}
+function ovpSheet(cid,rid){const c=S.cards.find(x=>x.id===cid),r=rid?S.records.find(x=>x.id===rid):null,i=cinfo(c);
+  const list=S.accounts.filter(a=>a.cur===(c.cur||'TWD')&&(!a.hidden||(r&&a.id===r.acc)));
+  if(!list.length){openSheet(`<h3>多付</h3><p>需要一個同幣別（${c.cur||'TWD'}）的帳戶，請先建立。</p><div class="acts"><button class="btn" data-a="close">關閉</button></div>`);return}
+  const sel=r?r.acc:(c.acc||list[0].id);
+  openSheet(`<h3>${r?'修改多付':'多付'}：${esc(c.name)}</h3><p class="sub">多付的錢不是這期卡費，會記成「多付餘額」（目前 ${num(i.ov)}），之後可以拿來抵扣卡費。這筆錢會從你選的帳戶扣掉。</p><label for="ov-amt">多付金額</label><input class="money" id="ov-amt" inputmode="decimal" value="${r?r.amt:''}"><label for="ov-acc">從哪個帳戶扣</label><select id="ov-acc">${list.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${esc(a.name)}</option>`).join('')}</select><label for="ov-date">日期</label><input type="date" id="ov-date" value="${r?r.date:today()}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="card" data-id="${cid}">取消</button>${r?`<button class="btn danger" data-a="ovdel" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="ovpsave" data-id="${cid}" data-rid="${rid||''}">儲存</button></div>`)}
+function ovpSave(cid,rid,t){const c=S.cards.find(x=>x.id===cid),amt=r2(parseFloat($('#ov-amt').value.replace(/,/g,''))),accId=$('#ov-acc').value,date=$('#ov-date').value||today(),old=rid?S.records.find(x=>x.id===rid):null;
+  if(!(amt>0)){$('#err').textContent='請輸入大於 0 的金額。';return}
+  if(old&&r2(cinfo(c).ov-old.amt+amt)<0){$('#err').textContent='已經抵扣過一部分，金額不能改得比已抵扣的還少。';return}
+  const od=old?old.date:date;if(pastGuard(t,od<date?od:date))return;
+  const o={type:'ovp',amt,item:'多付卡費：'+c.name,acc:accId,card:cid,date,bud:''};
+  if(old)Object.assign(old,o);else S.records.push({id:uid(),...o});
+  save();cardSheet(cid)}
+function ovoSheet(cid,rid){const c=S.cards.find(x=>x.id===cid),r=rid?S.records.find(x=>x.id===rid):null,i=cinfo(c);
+  const ks=[[i.prev,'上期',i.prevT],[i.cur,'當期',i.curT],[i.nxt,'下期',i.nxtT]],sel=r?r.stm:(i.curT>0?i.cur:i.prev),pool=r2(i.ov+(r?r.amt:0));
+  openSheet(`<h3>${r?'修改抵扣':'抵扣卡費'}：${esc(c.name)}</h3><p class="sub">從多付餘額（${num(pool)}）扣掉，讓所選那一期的卡費減少。帳戶和支出都不會變動。</p><label for="oo-amt">抵扣金額</label><input class="money" id="oo-amt" inputmode="decimal" value="${r?r.amt:''}" placeholder="200"><label for="oo-stm">抵扣哪一期</label><select id="oo-stm">${ks.map(k=>`<option value="${k[0]}" ${k[0]===sel?'selected':''}>${k[1]}（${md(k[0])} 結帳）卡費 ${num(k[2]+(r&&r.stm===k[0]?r.amt:0))}</option>`).join('')}</select><label for="oo-date">日期</label><input type="date" id="oo-date" value="${r?r.date:today()}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="card" data-id="${cid}">取消</button>${r?`<button class="btn danger" data-a="ovdel" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="ovosave" data-id="${cid}" data-rid="${rid||''}">儲存</button></div>`)}
+function ovoSave(cid,rid,t){const c=S.cards.find(x=>x.id===cid),i=cinfo(c),old=rid?S.records.find(x=>x.id===rid):null,amt=r2(parseFloat($('#oo-amt').value.replace(/,/g,''))),stm=$('#oo-stm').value,date=$('#oo-date').value||today(),pool=r2(i.ov+(old?old.amt:0));
+  if(!(amt>0)){$('#err').textContent='請輸入大於 0 的金額。';return}
+  if(amt>pool){$('#err').textContent=`不能超過多付餘額 ${num(pool)}。`;return}
+  const T={[i.prev]:i.prevT,[i.cur]:i.curT,[i.nxt]:i.nxtT},room=r2((T[stm]||0)+(old&&old.stm===stm?old.amt:0));
+  if(amt>room){$('#err').textContent=`抵扣不能超過那一期的卡費 ${num(room)}。`;return}
+  const od=old?old.date:date;if(pastGuard(t,od<date?od:date))return;
+  const o={type:'ovo',amt,item:'抵扣卡費：'+c.name,acc:'',card:cid,date,stm,bud:''};
+  if(old)Object.assign(old,o);else S.records.push({id:uid(),...o});
+  save();cardSheet(cid)}
 function paySheet(cid,rid){const c=S.cards.find(x=>x.id===cid),r=rid?S.records.find(x=>x.id===rid):null,i=cinfo(c);
   const list=S.accounts.filter(a=>a.cur===(c.cur||'TWD')&&(!a.hidden||(r&&a.id===r.acc)));
   if(!list.length){openSheet(`<h3>繳款</h3><p>繳款需要一個同幣別（${c.cur||'TWD'}）的帳戶，請先建立。</p><div class="acts"><button class="btn" data-a="close">關閉</button></div>`);return}
   const sel=r?r.acc:(c.acc||list[0].id),amt=r?r.amt:(i.prevT>0?i.prevT:'');
-  openSheet(`<h3>${r?'修改繳款':'繳款'}：${esc(c.name)}</h3><p class="sub">未繳總計 ${num(i.out)}。繳款後，這筆錢會從你選的帳戶扣掉。</p><label for="p-amt">繳款金額</label><input class="money" id="p-amt" inputmode="decimal" value="${amt}"><label for="p-acc">從哪個帳戶扣</label><select id="p-acc">${list.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${esc(a.name)}</option>`).join('')}</select><label for="p-date">日期</label><input type="date" id="p-date" value="${r?r.date:today()}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="card" data-id="${cid}">取消</button>${r?`<button class="btn danger" data-a="paydel" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="paysave" data-id="${cid}" data-rid="${rid||''}">儲存</button></div>`)}
+  openSheet(`<h3>${r?'修改繳款':'繳款'}：${esc(c.name)}</h3><p class="sub">未繳總計 ${num(i.out)}。繳款後，這筆錢會從你選的帳戶扣掉。</p><label for="p-amt">繳款金額</label><input class="money" id="p-amt" inputmode="decimal" value="${amt}"><label for="p-acc">從哪個帳戶扣</label><select id="p-acc">${list.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${esc(a.name)}</option>`).join('')}</select>${r?'':`<label for="p-ov">另外多付（選填）</label><input class="money" id="p-ov" inputmode="decimal" placeholder="0"><p class="sub" style="margin-top:6px">例如這期應繳 10,000，你付了 14,000：繳款金額填 10,000，這裡填 4,000。多付的會記成「多付餘額」，之後可以抵扣卡費。</p>`}<label for="p-date">日期</label><input type="date" id="p-date" value="${r?r.date:today()}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="card" data-id="${cid}">取消</button>${r?`<button class="btn danger" data-a="paydel" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="paysave" data-id="${cid}" data-rid="${rid||''}">儲存</button></div>`)}
 function paySave(cid,rid,t){const c=S.cards.find(x=>x.id===cid),amt=r2(parseFloat($('#p-amt').value.replace(/,/g,''))),accId=$('#p-acc').value,date=$('#p-date').value||today();
   if(!(amt>0)){$('#err').textContent='請輸入大於 0 的金額。';return}
   const od=rid?S.records.find(x=>x.id===rid).date:date;if(pastGuard(t,od<date?od:date))return;
   const o={type:'pay',amt,item:'繳卡費：'+c.name,acc:accId,card:cid,date,bud:''};
   if(rid)Object.assign(S.records.find(x=>x.id===rid),o);else S.records.push({id:uid(),...o});
+  const ovx=rid?0:r2(parseFloat((($('#p-ov')||{}).value||'0').replace(/,/g,''))||0);
+  if(ovx>0)S.records.push({id:uid(),type:'ovp',amt:ovx,item:'多付卡費：'+c.name,acc:accId,card:cid,date,bud:''});
   save();cardSheet(cid)}
 function adjSheet(bid,aid){const b=S.budgets.find(x=>x.id===bid),x=b.adj.find(y=>y.id===aid);adjSign=x.amt<0?-1:1;
   openSheet(`<h3>修改調整</h3><div class="seg"><button data-s="1" aria-pressed="${adjSign===1}">增加</button><button data-s="-1" aria-pressed="${adjSign===-1}">減少</button></div><label for="b-adj">金額</label><input id="b-adj" inputmode="decimal" value="${Math.abs(x.amt)}"><label for="b-note">備註：這筆錢從哪裡來／去哪裡</label><input id="b-note" value="${esc(x.note)}"><label for="b-date">日期</label><input type="date" id="b-date" value="${x.date}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="bback" data-id="${bid}">返回</button><button class="btn danger" data-a="adjdel" data-id="${bid}" data-aid="${aid}">刪除</button><button class="btn" data-a="adjsave" data-id="${bid}" data-aid="${aid}">儲存</button></div>`)}
@@ -585,7 +685,7 @@ function adjSave(bid,aid,t){if(pastGuard(t,ym+'-01'))return;const b=S.budgets.fi
   if(!note){$('#err').textContent='請寫備註。';return}
   Object.assign(x,{amt:r2(v*adjSign),note,date});save();bSheet(bid)}
 let accSort='date',curAcc='';
-function accDetail(id){const a=acc(id),st=ym+'-01',en=ym+'-31';curAcc=id;let mx=0,ma=0;
+function accDetail(id){const a=acc(id),st=ym+'-01',en=ym+'-31';curAcc=id;curDetail=()=>accDetail(id);let mx=0,ma=0;
   let open=a.init,mi=0,mo=0,mp=0;const rs=[];
   S.records.forEach(r0=>{const e=fx(r0,id);if(!e)return;const r={type:e.t,amt:e.v,date:r0.date,adv:ADV.includes(r0.type)};
     if(r.date<st)open+=sign(r)*r.amt;
@@ -607,17 +707,23 @@ const nextYM=y=>{let [a,b]=y.split('-').map(Number);b++;if(b>12){b=1;a++}return 
 const remaining=(v,asOf)=>r2(v.log.filter(l=>l.date<=asOf).reduce((s,l)=>s+l.d,0)-S.records.filter(r=>r.rsv===v.id&&r.date<=asOf).reduce((s,r)=>s+r.amt,0));
 const resAt=(accId,asOf)=>r2(S.reserves.filter(v=>v.acc===accId).reduce((s,v)=>s+remaining(v,asOf),0));
 function accSum(id,end){const en=ym+'-31',rv=S.reserves.filter(v=>v.acc===id),res=resAt(id,en),due=r2(S.cards.filter(c=>c.acc===id).reduce((s,c)=>s+Math.max(0,cinfo(c).out),0)),sp=r2(end-res-due);
-  return `<div class="row"><span>預留項目合計</span><span class="amt">${num(res)}</span></div>${due?`<div class="row"><span>待扣信用卡費</span><span class="amt">${num(due)}</span></div>`:''}<div class="row"><span>應有金額</span><span class="amt">${num(r2(res+due))}</span></div><div class="row"><b>盈餘</b><span class="amt ${sp<0?'out':''}">${num(sp)}</span></div><h3 style="margin-top:16px">預留項目</h3>`+(rv.length?rv.map(v=>{const m=remaining(v,en);return `<button class="row" data-a="rsv" data-id="${v.id}"><div><b>${esc(v.name)}</b><small>${m>0?'預留中':'已用完或已釋出'}</small></div><div class="amt">${num(m)}</div></button>`}).join(''):`<p class="sub">還沒有預留項目。例如「房租預留 15000」。</p>`)+`<button class="link" data-a="rsvnew" data-id="${id}">新增預留項目</button>`}
-function rsvNew(accId){openSheet(`<h3>新增預留項目</h3><p class="sub">帳戶：${esc(acc(accId).name)}。預留只是標記，不會改變帳戶實際金額，也不算預算。</p><label for="rv-name">項目名稱</label><input id="rv-name" placeholder="例如：房租預留"><label for="rv-amt">預留金額</label><input id="rv-amt" inputmode="decimal" placeholder="15000"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="accd" data-id="${accId}">取消</button><button class="btn" data-a="rsvsave" data-id="${accId}">建立</button></div>`)}
-function rsvSave(accId){const name=$('#rv-name').value.trim(),v=r2(parseFloat($('#rv-amt').value.replace(/,/g,'')));
+  return `<div class="row"><span>預留項目合計</span><span class="amt">${num(res)}</span></div>${due?`<div class="row"><span>待扣信用卡費</span><span class="amt">${num(due)}</span></div>`:''}<div class="row"><span>應有金額</span><span class="amt">${num(r2(res+due))}</span></div><div class="row"><b>盈餘</b><span class="amt ${sp<0?'out':''}">${num(sp)}</span></div><h3 style="margin-top:16px">預留項目</h3>`+(rv.length?rv.map(v=>{const m=remaining(v,en);return `<button class="row" data-a="rsv" data-id="${v.id}"><div><b>${esc(v.name)}</b><small>${m>0?'預留中':'已用完或已釋出'}</small></div><div class="amt">${num(m)}</div></button>`}).join(''):`<p class="sub">還沒有預留項目。例如「房租預留 15000」。</p>`)+`<button class="link" data-a="rsvnew" data-id="${id}">新增預留項目</button>${rv.length?`　<button class="link" data-a="rsvmove" data-id="${id}">全部移到其他帳戶</button>`:''}`}
+function rsvMoveSheet(id){const a=acc(id),n=S.reserves.filter(v=>v.acc===id).length;
+  const items=S.accounts.filter(x=>x.id!==id&&x.cur===a.cur&&!x.hidden).map(x=>({v:x.id,name:x.name,cur:x.cur})).concat([{v:'__total',name:'總計（不屬於任何帳戶）',cur:a.cur,grp:'或'}]);
+  openSheet(`<h3>移動預留項目</h3><p class="sub">把「${esc(a.name)}」的 ${n} 個預留項目全部移到下面選的位置。預留只是標記，帳戶實際金額都不變；過去月份的「應有／盈餘」也會跟著改算在新位置。只能移到同幣別（${a.cur}）的帳戶。</p><select id="mv-to" hidden>${items.map(i=>`<option value="${i.v}">${esc(i.name)}</option>`).join('')}</select><div id="mv-to-pick">${pickHtml('mv-to',items,items[0].v)}</div><div class="acts"><button class="btn alt" data-a="accd" data-id="${id}">取消</button><button class="btn" data-a="rsvmovego" data-id="${id}">移動</button></div>`)}
+function rsvMoveGo(id){const to=$('#mv-to').value,a=acc(id);if(!to)return;
+  S.reserves.forEach(v=>{if(v.acc===id){if(to==='__total'){v.acc='';v.cur=a.cur}else{v.acc=to;delete v.cur}}});
+  save();if(to==='__total')closeSheet();else accDetail(to)}
+function rsvNew(accId,cur){openSheet(`<h3>新增預留項目</h3><p class="sub">${accId?`帳戶：${esc(acc(accId).name)}。`:`總計（${cur}）：不屬於任何帳戶，只影響總計的「應有」和「盈餘」。`}預留只是標記，不會改變帳戶實際金額，也不算預算。</p><label for="rv-name">項目名稱</label><input id="rv-name" placeholder="例如：房租預留"><label for="rv-amt">預留金額</label><input id="rv-amt" inputmode="decimal" placeholder="15000"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="${accId?'accd':'close'}" data-id="${accId}">取消</button><button class="btn" data-a="rsvsave" data-id="${accId}" data-c="${cur||''}">建立</button></div>`)}
+function rsvSave(accId,cur){const name=$('#rv-name').value.trim(),v=r2(parseFloat($('#rv-amt').value.replace(/,/g,'')));
   if(!name){$('#err').textContent='請輸入項目名稱。';return}
   if(!(v>0)){$('#err').textContent='請輸入大於 0 的金額。';return}
-  S.reserves.push({id:uid(),acc:accId,name,log:[{id:uid(),date:today(),d:v,type:'add',note:'建立'}]});save();accDetail(accId)}
-function rsvSheet(id){const v=S.reserves.find(x=>x.id===id),m=remaining(v,'9999-12-31');
+  S.reserves.push(Object.assign({id:uid(),acc:accId,name,log:[{id:uid(),date:today(),d:v,type:'add',note:'建立'}]},accId?{}:{cur:cur||'TWD'}));save();if(accId)accDetail(accId);else closeSheet()}
+function rsvSheet(id){const v=S.reserves.find(x=>x.id===id),m=remaining(v,'9999-12-31');curDetail=()=>rsvSheet(id);
   const tr=[...v.log.map(l=>({date:l.date,t:l.type==='add'?'增加預留':'釋出（不花掉）',d:l.d,note:l.note,lid:l.id})),...S.records.filter(r=>r.rsv===id).map(r=>({date:r.date,t:'使用',d:-r.amt,note:r.item,rid:r.id}))].sort((a,b)=>b.date.localeCompare(a.date));
-  openSheet(`<h3>${esc(v.name)}</h3><p class="sub">帳戶：${esc(acc(v.acc).name)}　目前預留 <b>${num(m)}</b></p><label for="rv-amt">金額</label><input id="rv-amt" inputmode="decimal" placeholder="${m}"><label for="rv-note">備註（選填）</label><input id="rv-note"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="rvadd" data-id="${id}">增加預留</button><button class="btn alt" data-a="rvrel" data-id="${id}">釋出</button></div><div class="acts"><button class="btn" data-a="rvuse" data-id="${id}">使用（記成支出）</button></div><h3 style="margin-top:18px">軌跡</h3>`+tr.map(x=>`<button class="row" data-a="${x.rid?'edit':'rvlog'}" data-id="${x.rid||id}" data-lid="${x.lid||''}"><div><b>${x.t}</b><small>${x.date}${x.note?'　'+esc(x.note):''}</small></div><div class="amt ${x.d<0?'out':'in'}">${x.d<0?'−':'+'}${num(Math.abs(x.d))}</div></button>`).join('')+`<div class="acts"><button class="btn alt" data-a="accd" data-id="${v.acc}">返回</button><button class="btn alt" data-a="rsvedit" data-id="${id}">編輯項目</button></div>`)}
+  openSheet(`<h3>${esc(v.name)}</h3><p class="sub">${v.acc?`帳戶：${esc(acc(v.acc).name)}`:'總計（不屬於任何帳戶）'}　目前預留 <b>${num(m)}</b></p><label for="rv-amt">金額</label><input id="rv-amt" inputmode="decimal" placeholder="${m}"><label for="rv-note">備註（選填）</label><input id="rv-note"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="rvadd" data-id="${id}">增加預留</button><button class="btn alt" data-a="rvrel" data-id="${id}">釋出</button></div><div class="acts"><button class="btn" data-a="rvuse" data-id="${id}">使用（記成支出）</button></div><h3 style="margin-top:18px">軌跡</h3>`+tr.map(x=>`<button class="row" data-a="${x.rid?'edit':'rvlog'}" data-id="${x.rid||id}" data-lid="${x.lid||''}"><div><b>${x.t}</b><small>${x.date}${x.note?'　'+esc(x.note):''}</small></div><div class="amt ${x.d<0?'out':'in'}">${x.d<0?'−':'+'}${num(Math.abs(x.d))}</div></button>`).join('')+`<div class="acts"><button class="btn alt" data-a="${v.acc?'accd':'close'}" data-id="${v.acc}">返回</button><button class="btn alt" data-a="rsvedit" data-id="${id}">編輯項目</button></div>`)}
 function rsvAct(id,k2){const v=S.reserves.find(x=>x.id===id),m=remaining(v,'9999-12-31'),raw=$('#rv-amt').value.replace(/,/g,'').trim(),note=$('#rv-note')?$('#rv-note').value.trim():'';
-  if(k2==='use'){const a0=raw?r2(parseFloat(raw)):m;if(!(a0>0)){$('#err').textContent='請輸入大於 0 的金額，或留空使用全部剩餘。';return}recSheet(null,{item:v.name,amt:a0,acc:v.acc,rsv:id});return}
+  if(k2==='use'){const a0=raw?r2(parseFloat(raw)):m;if(!(a0>0)){$('#err').textContent='請輸入大於 0 的金額，或留空使用全部剩餘。';return}recSheet(null,{item:v.name,amt:a0,acc:v.acc||((S.accounts.find(x=>!x.hidden&&x.cur===rcur(v))||{}).id||''),rsv:id});return}
   const x=r2(parseFloat(raw));if(!(x>0)){$('#err').textContent='請輸入大於 0 的金額。';return}
   if(k2==='rel'&&x>m){$('#err').textContent=`釋出金額不能超過目前預留 ${num(m)}。`;return}
   v.log.push({id:uid(),date:today(),d:k2==='add'?x:-x,type:k2==='add'?'add':'release',note});save();rsvSheet(id)}
@@ -652,16 +758,17 @@ function rsvEdit(id){const v=S.reserves.find(x=>x.id===id);
 const CURS=['TWD','JPY','USD','EUR','KRW','CNY','HKD','GBP'];
 const curOf=id=>{const a=acc(id);if(a)return a.cur;const c=S.cards.find(x=>x.id===id);return c?(c.cur||'TWD'):'TWD'};
 const ADV=['advo','advi','repr','reps'];
-const sg=r=>(r.type==='in'||r.type==='repr')?'+':(r.type==='xfer'||r.type==='advi')?'':'−';
+const sg=r=>(r.type==='in'||r.type==='repr')?'+':(r.type==='xfer'||r.type==='advi'||r.type==='ppu'||r.type==='ovo')?'':'−';
 const fx=(r,id)=>{
   if(r.type==='xfer'){if(r.acc===id)return {t:'xout',v:r.amt};if(r.to===id)return {t:'xin',v:r.amt2};return null}
   if(r.acc!==id)return null;
+  if(r.type==='ovp')return {t:'pay',v:r.amt};
   if(r.type==='advo'||r.type==='reps')return {t:'xout',v:r.amt};
   if(r.type==='repr')return {t:'xin',v:r.amt};
   return {t:r.type,v:r.amt};
 };
 function editRec(id){const r=S.records.find(x=>x.id===id);if(!r)return;
-  if(r.type==='pay')paySheet(r.card,id);else if(r.type==='xfer')xferSheet(id);else if(ADV.includes(r.type))advSheet(r.type,id);else recSheet(id)}
+  if(r.type==='pay')paySheet(r.card,id);else if(r.type==='ovp')ovpSheet(r.card,id);else if(r.type==='ovo')ovoSheet(r.card,id);else if(r.type==='ppu')ppUseSheet(r.pp,id);else if(r.type==='xfer')xferSheet(id);else if(r.grp)recSheet(id);else if(ADV.includes(r.type))advSheet(r.type,id);else recSheet(id)}
 let xv2='';
 function xferSheet(id,pre){const r=id?S.records.find(x=>x.id===id):null,v=pre||(r?{from:r.acc,to:r.to,amt:r.amt,amt2:r.amt2,date:r.date,note:r.note||''}:{from:'',to:'',amt:'',amt2:'',date:today(),note:''});
   const L=S.accounts.filter(a=>!a.hidden||a.id===v.from||a.id===v.to);
@@ -687,42 +794,80 @@ function xSave(id,t){const from=$('#x-from').value,to=$('#x-to').value,amt=r2(pa
   const o={type:'xfer',acc:from,to,amt,amt2,date,item:f.cur===t2.cur?'轉帳':'換匯',note,bud:'',cur:f.cur};
   if(id)Object.assign(S.records.find(x=>x.id===id),o);else S.records.push({id:uid(),...o});
   if(f.cur==='TWD'&&t2.cur!=='TWD')S.rates[t2.cur]=Math.round(amt/amt2*1e6)/1e6;else if(t2.cur==='TWD'&&f.cur!=='TWD')S.rates[f.cur]=Math.round(amt2/amt*1e6)/1e6;
-  save();closeSheet()}
+  save();doneForm()}
 function advSum(){const m={};S.records.forEach(r=>{if(!ADV.includes(r.type))return;const k=r.who+'|'+r.cur,o=m[k]=m[k]||{who:r.who,cur:r.cur,v:0};
   o.v=r2(o.v+(r.type==='advo'||r.type==='reps'?r.amt:-r.amt))});return Object.values(m)}
-function advSheet(type,id,pre){const r=id?S.records.find(x=>x.id===id):null,v=pre||(r?{who:r.who,amt:r.amt,date:r.date,note:r.note||'',acc:r.acc||r.card,cur:r.cur}:{who:'',amt:'',date:today(),note:'',acc:'',cur:'TWD'});
+function advSheet(type,id,pre){const r=id?S.records.find(x=>x.id===id):null,v=pre||(r?{who:r.who,amt:r.amt,date:r.date,note:r.note||'',acc:r.acc||r.card,cur:r.cur,bud:r.bud||'',rate:r.rate||'',per:r.per||0}:{who:'',amt:'',date:today(),note:'',acc:'',cur:'TWD'});
   const title={advo:'我幫他人代墊',advi:'他人幫我代墊',repr:'對方還款給我',reps:'我還款給對方'}[type],needAcc=type!=='advi';
   const rep=type==='repr'||type==='reps';
   const list=S.accounts.filter(a=>(!a.hidden||a.id===v.acc)&&(!rep||a.cur===v.cur)).sort((a,b)=>(b.cur===v.cur)-(a.cur===v.cur)),sel=v.acc||(list[0]||{}).id;
   const cds=type==='advo'?S.cards:[],items=list.map(a=>({v:a.id,name:a.name,cur:a.cur})).concat(cds.map(c=>({v:c.id,name:c.name,cur:c.cur||'TWD',grp:'信用卡'}))),sel2=items.some(i=>i.v===sel)?sel:(items[0]||{}).v,opts=items.map(i=>`<option value="${i.v}" ${i.v===sel2?'selected':''}>${esc(i.name)}</option>`).join('');
   const names=[...new Set(S.records.filter(x=>x.who).map(x=>x.who))];
-  openSheet(`<h3>${title}</h3>${(type==='advo'||type==='advi')&&!id?`<div class="seg"><button data-ad="advo" aria-pressed="${type==='advo'}">我幫他人代墊</button><button data-ad="advi" aria-pressed="${type==='advi'}">他人幫我代墊</button></div>`:''}<p class="sub">${type==='advo'?'你先付了錢，帳戶會減少（刷信用卡則是增加卡費），但不算你的支出和預算。':type==='advi'?'對方先付了錢，你的帳戶不會變動，只記一筆「你欠對方」。':type==='repr'?'對方還錢給你，帳戶會增加。':'你還錢給對方，帳戶會減少。'}</p><label for="ad-who">對象</label><input id="ad-who" list="ad-names" value="${esc(v.who)}"><datalist id="ad-names">${names.map(n=>`<option value="${esc(n)}">`).join('')}</datalist><label for="ad-amt">金額</label><input class="money" id="ad-amt" inputmode="decimal" value="${v.amt}">`+(needAcc?`<label>帳戶${rep?`（${v.cur}）`:''}</label><select id="ad-acc" hidden>${opts}</select><div id="ad-acc-pick">${pickHtml('ad-acc',items,sel2)}</div>`:`<label for="ad-cur">幣別</label><select id="ad-cur">${CURS.map(c=>`<option ${c===v.cur?'selected':''}>${c}</option>`).join('')}</select>`)+`<label for="ad-date">日期</label><input type="date" id="ad-date" value="${v.date}"><label for="ad-note">備註（選填）</label><input id="ad-note" value="${esc(v.note)}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="close">取消</button>${r?`<button class="btn danger" data-a="advdel" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="advsave" data-t="${type}" data-id="${id||''}">儲存</button></div>`)}
-function advVals(){return {who:$('#ad-who').value,amt:$('#ad-amt').value,date:$('#ad-date').value,note:$('#ad-note').value,acc:$('#ad-acc')?$('#ad-acc').value:'',cur:$('#ad-cur')?$('#ad-cur').value:'TWD'}}
+  openSheet(`<h3>${title}</h3>${(type==='advo'||type==='advi')&&!id?`<div class="seg"><button data-ad="advo" aria-pressed="${type==='advo'}">我幫他人代墊</button><button data-ad="advi" aria-pressed="${type==='advi'}">他人幫我代墊</button></div>`:''}<p class="sub">${type==='advo'?'你先付了錢，帳戶會減少（刷信用卡則是增加卡費），但不算你的支出和預算。':type==='advi'?'對方先付了錢，你的帳戶不會變動，只記一筆「你欠對方」。':type==='repr'?'對方還錢給你，帳戶會增加。':'你還錢給對方，帳戶會減少。'}</p><label for="ad-who">對象</label><input id="ad-who" list="ad-names" value="${esc(v.who)}"><datalist id="ad-names">${names.map(n=>`<option value="${esc(n)}">`).join('')}</datalist><label for="ad-amt">金額</label><input class="money" id="ad-amt" inputmode="decimal" value="${v.amt}">`+(needAcc?`<label>帳戶${rep?`（${v.cur}）`:''}</label><select id="ad-acc" hidden>${opts}</select><div id="ad-acc-pick">${pickHtml('ad-acc',items,sel2)}</div><div id="ad-per-wrap"></div>`:`<label for="ad-cur">幣別</label><select id="ad-cur">${CURS.map(c=>`<option ${c===v.cur?'selected':''}>${c}</option>`).join('')}</select>`)+(type==='advi'?adBudHtml(v):'')+`<label for="ad-date">日期</label><input type="date" id="ad-date" value="${v.date}"><label for="ad-note">備註（選填）</label><input id="ad-note" value="${esc(v.note)}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="close">取消</button>${r?`<button class="btn danger" data-a="advdel" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="advsave" data-t="${type}" data-id="${id||''}">儲存</button></div>`);fillAdPer(v.per)}
+function fillAdPer(pv){const w=$('#ad-per-wrap');if(!w)return;const sel=$('#ad-acc')?$('#ad-acc').value:'',isC=S.cards.some(c=>c.id===sel),cur=pv!==undefined?String(pv):($('#ad-per')?$('#ad-per').value:'0');w.innerHTML=isC?`<label for="ad-per">帳期</label><select id="ad-per"><option value="0">依日期自動</option><option value="-1" ${cur==='-1'?'selected':''}>改算上一期</option><option value="1" ${cur==='1'?'selected':''}>改算下一期</option></select>`:''}
+function adBudHtml(v){const mo=(v.date||today()).slice(0,7),list=S.budgets.filter(b=>b.start<=mo);
+  return `<label for="ad-bud">算進哪個預算（選填）</label><select id="ad-bud"><option value="">不算進預算</option>${list.map(b=>`<option value="${b.id}" ${b.id===v.bud?'selected':''}>${esc(b.name)}</option>`).join('')}</select><label for="ad-rate">匯率（外幣才需要填，1 外幣＝幾 TWD）</label><input class="money" id="ad-rate" inputmode="decimal" value="${v.rate||S.rates[v.cur]||''}"><p class="sub" style="margin-top:6px">選了預算，這筆算成你那天的支出，會計入該預算和當月支出；之後還款給對方不會重複計算。</p>`}
+function advVals(){return {per:$('#ad-per')?$('#ad-per').value:'0',bud:$('#ad-bud')?$('#ad-bud').value:'',who:$('#ad-who').value,amt:$('#ad-amt').value,date:$('#ad-date').value,note:$('#ad-note').value,acc:$('#ad-acc')?$('#ad-acc').value:'',cur:$('#ad-cur')?$('#ad-cur').value:'TWD'}}
 function advSave(type,id,t){const who=$('#ad-who').value.trim(),amt=r2(parseFloat($('#ad-amt').value.replace(/,/g,''))),date=$('#ad-date').value||today(),note=$('#ad-note').value.trim(),needAcc=type!=='advi',accId=needAcc&&$('#ad-acc')?$('#ad-acc').value:'';
   if(!who){$('#err').textContent='請輸入對象。';return}
   if(!(amt>0)){$('#err').textContent='請輸入大於 0 的金額。';return}
   if(needAcc&&!accId){$('#err').textContent='找不到可用的帳戶，請先建立同幣別的帳戶。';return}
   const isCard=needAcc&&S.cards.some(c=>c.id===accId),cur=needAcc?(isCard?(S.cards.find(c=>c.id===accId).cur||'TWD'):acc(accId).cur):$('#ad-cur').value;
+  const bud=type==='advi'&&$('#ad-bud')?$('#ad-bud').value:'',rate=bud&&cur!=='TWD'?Math.round(parseFloat($('#ad-rate').value)*1e6)/1e6:0;
+  if(bud&&cur!=='TWD'&&!(rate>0)){$('#err').textContent='外幣支出要算進預算，請輸入匯率。';return}
+  const bb=bud?S.budgets.find(b=>b.id===bud):null;if(bb&&bb.start>date.slice(0,7)){$('#err').textContent=`預算「${bb.name}」從 ${bb.start} 才開始，這筆日期太早。`;return}
   const od=id?S.records.find(x=>x.id===id).date:date;if(pastGuard(t,od<date?od:date))return;
   const base={advo:`代墊給 ${who}`,advi:`${who} 代墊`,repr:`${who} 還款`,reps:`還款給 ${who}`}[type],item=base+(note?`：${note}`:'');
-  const o={type,amt,acc:isCard?'':accId,card:isCard?accId:'',date,item,who,cur,note,bud:''};
+  const o={type,amt,acc:isCard?'':accId,card:isCard?accId:'',date,item,who,cur,note,bud,rate:rate||0,per:isCard?(parseInt($('#ad-per')?$('#ad-per').value:'0')||0):0};
   if(id)Object.assign(S.records.find(x=>x.id===id),o);else S.records.push({id:uid(),...o});
-  save();closeSheet()}
-function advPerson(who,cur){const rs=S.records.filter(r=>ADV.includes(r.type)&&r.who===who&&r.cur===cur).sort((a,b)=>b.date.localeCompare(a.date)),o=advSum().find(x=>x.who===who&&x.cur===cur)||{v:0};
+  if(rate>0)S.rates[cur]=rate;save();doneForm()}
+function advPerson(who,cur){curDetail=()=>advPerson(who,cur);const rs=S.records.filter(r=>ADV.includes(r.type)&&r.who===who&&r.cur===cur).sort((a,b)=>b.date.localeCompare(a.date)),o=advSum().find(x=>x.who===who&&x.cur===cur)||{v:0};
   openSheet(`<h3>${esc(who)}</h3><p class="sub">${o.v>0?`${esc(who)} 欠我 ${cur} ${num(o.v)}`:o.v<0?`我欠 ${esc(who)} ${cur} ${num(-o.v)}`:'已結清'}</p><div class="acts"><button class="btn" data-a="advrep" data-w="${esc(who)}" data-c="${cur}">${o.v<0?'我還款':'對方還款'}</button><button class="btn alt" data-a="advnew" data-w="${esc(who)}" data-c="${cur}">再記一筆代墊</button></div><h3 style="margin-top:18px">明細</h3>`+rs.map(r=>`<button class="row" data-a="edit" data-id="${r.id}"><div><b>${esc(r.item)}</b><small>${r.date}</small></div><div class="amt ${r.type}">${sg(r)}${num(r.amt)}</div></button>`).join('')+`<div class="acts"><button class="btn alt" data-a="close">關閉</button></div>`)}
+const sortBtn=(s,n)=>(n>1||sortSec===s)?`<button class="link" data-a="sort" data-id="${s}">${sortSec===s?'完成':'排序'}</button>`:'';
+const srtRow=(name,sec,id)=>`<div class="row srt"><b>${name}</b><span class="mv"><button type="button" data-a="mvup" data-sec="${sec}" data-id="${id}" aria-label="上移">▲</button><button type="button" data-a="mvdn" data-sec="${sec}" data-id="${id}" aria-label="下移">▼</button></span></div>`;
+function advList(){const ord=S.advOrder||[];return advSum().filter(o=>o.v!==0).map((o,i)=>({o,i,k:ord.indexOf(o.who+'|'+o.cur)})).sort((a,b)=>(a.k<0?1e6+a.i:a.k)-(b.k<0?1e6+b.i:b.k)).map(x=>x.o)}
+function swapIn(arr,vis,id,dir){const vi=vis.findIndex(x=>x.id===id),vj=vi+dir;if(vi<0||vj<0||vj>=vis.length)return;const i=arr.indexOf(vis[vi]),j=arr.indexOf(vis[vj]);const tmp=arr[i];arr[i]=arr[j];arr[j]=tmp}
+function moveItem(sec,id,dir){
+  if(sec==='ov'){const a=acc(id);if(a)swapIn(S.accounts,S.accounts.filter(x=>!x.hidden&&x.cur===a.cur),id,dir)}
+  else if(sec==='card')swapIn(S.cards,S.cards,id,dir);
+  else if(sec==='bud')swapIn(S.budgets,S.budgets.filter(b=>b.start<=ym),id,dir);
+  else if(sec==='adv'){const ks=advList().map(o=>o.who+'|'+o.cur),i=ks.indexOf(id),j=i+dir;if(i<0||j<0||j>=ks.length)return;const tmp=ks[i];ks[i]=ks[j];ks[j]=tmp;S.advOrder=ks}
+  save();render()}
+const ppUsed=p=>r2(S.records.filter(r=>r.type==='ppu'&&r.pp===p.id).reduce((s,r)=>s+r.amt,0));
+const ppLeft=p=>r2(p.amt-ppUsed(p));
+function ppHtml(){if(kind!=='out'||curRsv||splits.length)return '';
+  return `<label class="chk"><input type="checkbox" id="f-pp" ${ppOn?'checked':''}> 這是預付款（之後分次使用）</label>`+(ppOn?`<p class="sub" style="margin:0 0 4px">這筆照常算在當月支出，但不套預算。之後每次使用，才從你選的預算扣，不會再算一次支出。</p>`:'')}
+function ppApply(rec,on,name,amt,cur,date){const p=rec.ppid?S.prepaid.find(x=>x.id===rec.ppid):null;
+  if(on){if(p){p.name=name;p.amt=amt;p.cur=cur;p.date=date}else{const np={id:uid(),name,cur,amt,rec:rec.id,date};S.prepaid.push(np);rec.ppid=np.id}}
+  else if(p){S.prepaid=S.prepaid.filter(x=>x.id!==p.id);delete rec.ppid}}
+function ppSheet(id){const p=S.prepaid.find(x=>x.id===id);if(!p){closeSheet();return}curDetail=()=>ppSheet(id);
+  const us=S.records.filter(r=>r.type==='ppu'&&r.pp===id).sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));
+  openSheet(`<h3>${esc(p.name)}</h3><p class="sub">原本付了 ${money(p.amt,p.cur)}（${p.date}），那筆已照常算進當時的支出。之後每次使用，從你選的預算扣，不會再算一次支出，也不動帳戶。</p><div class="row"><b>剩餘</b><span class="amt">${money(ppLeft(p),p.cur)}</span></div><p class="sub" style="margin:0">已使用 ${money(ppUsed(p),p.cur)}</p><h3 style="margin-top:16px">使用記錄</h3>`+(us.length?us.map(r=>`<button class="row" data-a="edit" data-id="${r.id}"><div><b>${r.date}</b><small>${r.bud?'預算：'+esc((S.budgets.find(b=>b.id===r.bud)||{name:'已刪除'}).name):'不算進預算'}${r.note?'　'+esc(r.note):''}</small></div><div class="amt">−${num(r.amt)}</div></button>`).join(''):`<p class="sub">還沒有使用記錄。</p>`)+`<div class="acts"><button class="btn" data-a="ppuse" data-id="${id}">使用一次</button><button class="btn alt" data-a="close">關閉</button></div><button class="link" data-a="ppdel" data-id="${id}">刪除這個預付款項目</button>`)}
+function ppUseSheet(pid,rid){const p=S.prepaid.find(x=>x.id===pid),r=rid?S.records.find(x=>x.id===rid):null;if(!p)return;
+  const left=r2(ppLeft(p)+(r?r.amt:0)),date=r?r.date:today(),list=S.budgets.filter(b=>b.start<=date.slice(0,7));
+  openSheet(`<h3>${r?'修改使用':'使用一次'}：${esc(p.name)}</h3><p class="sub">剩餘 ${money(left,p.cur)}。只會從預算扣，不算支出、不動帳戶。</p><label for="pu-amt">這次使用金額</label><input class="money" id="pu-amt" inputmode="decimal" value="${r?r.amt:''}" placeholder="100"><label for="pu-bud">從哪個預算扣（選填）</label><select id="pu-bud"><option value="">不算進預算</option>${list.map(b=>`<option value="${b.id}" ${r&&r.bud===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>${p.cur!=='TWD'?`<label for="pu-rate">匯率（1 ${p.cur} = ? TWD）</label><input class="money" id="pu-rate" inputmode="decimal" value="${(r&&r.rate)||S.rates[p.cur]||''}">`:''}<label for="pu-date">日期</label><input type="date" id="pu-date" value="${date}"><label for="pu-note">備註（選填）</label><input id="pu-note" value="${r?esc(r.note||''):''}"><div class="err" id="err"></div><div class="acts"><button class="btn alt" data-a="close">取消</button>${r?`<button class="btn danger" data-a="ppudel" data-id="${r.id}">刪除</button>`:''}<button class="btn" data-a="ppusave" data-id="${pid}" data-rid="${rid||''}">儲存</button></div>`)}
+function ppUseSave(pid,rid,t){const p=S.prepaid.find(x=>x.id===pid),r=rid?S.records.find(x=>x.id===rid):null,amt=r2(parseFloat($('#pu-amt').value.replace(/,/g,''))),bud=$('#pu-bud').value,date=$('#pu-date').value||today(),note=$('#pu-note').value.trim(),left=r2(ppLeft(p)+(r?r.amt:0)),rate=bud&&p.cur!=='TWD'?Math.round(parseFloat($('#pu-rate').value)*1e6)/1e6:0;
+  if(!(amt>0)){$('#err').textContent='請輸入大於 0 的金額。';return}
+  if(amt>left){$('#err').textContent=`這次使用不能超過剩餘 ${num(left)}。`;return}
+  if(bud&&p.cur!=='TWD'&&!(rate>0)){$('#err').textContent='外幣要算進預算，請輸入匯率。';return}
+  const bb=bud?S.budgets.find(b=>b.id===bud):null;if(bb&&bb.start>date.slice(0,7)){$('#err').textContent=`預算「${bb.name}」從 ${bb.start} 才開始，這個日期太早。`;return}
+  const od=r?r.date:date;if(pastGuard(t,od<date?od:date))return;
+  const o={type:'ppu',pp:pid,amt,date,bud,rate:rate||0,item:p.name+'（使用）',cur:p.cur,note};
+  if(r)Object.assign(r,o);else S.records.push({id:uid(),...o});
+  if(rate>0)S.rates[p.cur]=rate;save();doneForm()}
 function ovHtml(rows,tot){
-  const f=v=>num(r2(v));
+  const f=v=>num(r2(v)),en=ym+'-31';
   const sec=(e,n)=>Math.abs(n)>0.004?`<span class="sec">盈餘 <b class="${e-n<0?'neg':''}">${f(e-n)}</b>　應有 <b>${f(n)}</b></span>`:'';
-  return `<div class="card"><h2>所有帳戶合計</h2>`+Object.keys(tot).map(c=>{const t=tot[c],rs=rows.filter(x=>x.a.cur===c),need=rs.reduce((s,x)=>s+x.due+x.res,0);
-    return `<div class="ov"><div class="ovh"><span class="code">${c}</span><span class="sub">本月收入 <span class="in">+${f(t.mi)}</span>　支出（含刷卡） <span class="out">−${f(t.mo)}</span></span></div><div class="ar tot"><span class="nm">總計</span><span class="v">${f(t.end)}</span>${sec(t.end,need)}</div>`+rs.map(x=>`<button class="ar" data-a="accd" data-id="${x.a.id}"><span class="nm">${esc(x.a.name)}</span><span class="v">${f(x.end)}</span>${sec(x.end,x.due+x.res)}</button>`).join('')+`</div>`}).join('<div style="height:12px"></div>')+`<button class="link" data-a="accs">管理帳戶</button></div>`}
+  return `<div class="card"><h2 class="h2s">所有帳戶合計${sortBtn('ov',rows.length)}</h2>`+Object.keys(tot).map(c=>{const t=tot[c],rs=rows.filter(x=>x.a.cur===c),ur=S.reserves.filter(v=>!v.acc&&rcur(v)===c),need=r2(rs.reduce((s,x)=>s+x.due+x.res,0)+ur.reduce((s,v)=>s+remaining(v,en),0));
+    return `<div class="ov"><div class="ovh"><span class="code">${c}</span><span class="sub">本月收入 <span class="in">+${f(t.mi)}</span>　支出（含刷卡） <span class="out">−${f(t.mo)}</span></span></div><div class="ar tot"><span class="nm">總計</span><span class="v">${f(t.end)}</span>${sec(t.end,need)}</div>`+(ur.length?`<div class="ucap">預留項目（沒有歸在任何帳戶）</div>`+ur.map(v=>`<button class="ar u" data-a="rsv" data-id="${v.id}"><span class="nm">${esc(v.name)}</span><span class="v">${f(remaining(v,en))}</span></button>`).join(''):'')+`<button class="link ulink" data-a="rsvnew" data-id="" data-c="${c}">＋ 總計預留項目</button>`+rs.map(x=>sortSec==='ov'?srtRow(esc(x.a.name),'ov',x.a.id):`<button class="ar" data-a="accd" data-id="${x.a.id}"><span class="nm">${esc(x.a.name)}</span><span class="v">${f(x.end)}</span>${sec(x.end,x.due+x.res)}</button>`).join('')+`</div>`}).join('<div style="height:12px"></div>')+`<button class="link" data-a="accs">管理帳戶</button></div>`}
 function nxtClose(c,k){let y=+k.slice(0,4),m=+k.slice(5,7)+1;if(m>12){m=1;y++}return cl(c,y,m)}
 let remindDone=false;
 function maybeRemind(){if(remindDone)return;remindDone=true;const t=today(),mo=t.slice(0,7);
   const due=S.cards.filter(c=>c.pay&&cl({close:c.pay},+t.slice(0,4),+t.slice(5,7))===t&&!S.records.some(r=>r.type==='pay'&&r.card===c.id&&r.date.slice(0,7)===mo)&&cinfo(c).out>0);
   if(!due.length)return;
   openSheet(`<h3>今天是繳費日</h3><p class="sub">這個月還沒有繳款記錄。</p>`+due.map(c=>`<div class="row"><div><b>${esc(c.name)}</b><small>未繳總計 ${num(cinfo(c).out)} ${c.cur||'TWD'}</small></div><button class="btn" style="padding:8px 14px" data-a="pay" data-id="${c.id}">去繳款</button></div>`).join('')+`<div class="acts"><button class="btn alt" data-a="close">稍後再說</button></div>`)}
-function spendHtml(b){const rs=S.records.filter(r=>r.type==='out'&&r.bud===b.id&&r.date.slice(0,7)===ym).sort((p,q)=>q.date.localeCompare(p.date));
-  return `<h3 style="margin-top:14px">本月花費明細</h3>`+(rs.length?rs.map(r=>{const a=acc(r.acc),cd=S.cards.find(c=>c.id===r.card),cu=a?a.cur:cd?(cd.cur||'TWD'):'TWD';return `<button class="row" data-a="edit" data-id="${r.id}"><div><b>${esc(r.item)}</b><small>${r.date}　${a?esc(a.name):cd?'信用卡 '+esc(cd.name):''}</small></div><div class="amt out">−${num(r.amt)} <small style="display:inline">${cu}</small>${cu!=='TWD'&&r.rate?`<small>≈ ${num(r2(r.amt*r.rate))} TWD</small>`:''}</div></button>`}).join(''):`<p class="sub">這個月還沒有花費。</p>`)+`<div class="row"><b>本月花費合計</b><span class="amt out">${num(r2(rs.reduce((s,r)=>s+r.amt*(r.rate||1),0)))} TWD</span></div>`}
+function spendHtml(b){const rs=S.records.filter(r=>(r.type==='out'||r.type==='advi'||r.type==='ppu')&&r.bud===b.id&&r.date.slice(0,7)===ym).sort((p,q)=>q.date.localeCompare(p.date));
+  return `<h3 style="margin-top:14px">本月花費明細</h3>`+(rs.length?rs.map(r=>{const a=acc(r.acc),cd=S.cards.find(c=>c.id===r.card),cu=a?a.cur:cd?(cd.cur||'TWD'):(r.cur||'TWD');return `<button class="row" data-a="edit" data-id="${r.id}"><div><b>${esc(r.item)}</b><small>${r.date}　${a?esc(a.name):cd?'信用卡 '+esc(cd.name):r.type==='advi'?'他人代墊':r.type==='ppu'?'預付款使用':''}</small></div><div class="amt out">−${num(r.amt)} <small style="display:inline">${cu}</small>${cu!=='TWD'&&r.rate?`<small>≈ ${num(r2(r.amt*r.rate))} TWD</small>`:''}</div></button>`}).join(''):`<p class="sub">這個月還沒有花費。</p>`)+`<div class="row"><b>本月花費合計</b><span class="amt out">${num(r2(rs.reduce((s,r)=>s+r.amt*(r.rate||1),0)))} TWD</span></div>`}
 let lastY=0;addEventListener('scroll',()=>{const y=scrollY;$('#fab').classList.toggle('mini',y>lastY&&y>60);lastY=y},{passive:true});
 function notice(){
   if(user)return;let seen=false;try{seen=!!localStorage.getItem(SEEN)}catch(e){}
@@ -734,31 +879,47 @@ document.addEventListener('click',e=>{
   const t=e.target.closest('button,[data-a]');if(!t)return;
   if(Date.now()-justSwiped<400&&t.classList.contains('row'))return;
   const a=t.dataset.a,id=t.dataset.id;
+  if(curDetail&&(a==='edit'||a==='rvuse'||a==='advnew'||a==='advrep'||a==='anew'||a==='xnew'||a==='ppuse'||a==='ovnew'||a==='ovoff'))retTo=curDetail;
   if(t.id==='prev'||t.id==='next'){let [y,m]=ym.split('-').map(Number);m+=t.id==='next'?1:-1;if(m<1){m=12;y--}if(m>12){m=1;y++}ym=`${y}-${pad(m)}`;render();return}
   if(t.id==='back'){ym=today().slice(0,7);render();return}
   if(t.id==='fab'){recSheet();return}
-  if(t.dataset.k){kind=t.dataset.k;document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===kind));fillAcc();fillBud();return}
+  if(t.dataset.k){kind=t.dataset.k;document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===kind));fillAcc();fillBud();{const sw=$('#split-wrap'),pw=$('#pp-wrap');if(sw)sw.innerHTML=splitHtml();if(pw)pw.innerHTML=ppHtml()}return}
   if(t.dataset.ad){advSheet(t.dataset.ad,null,advVals());return}
   if(t.dataset.o){accSort=t.dataset.o;accDetail(curAcc);return}
   if(t.dataset.pick){const s=$('#'+t.dataset.pick);s.value=t.dataset.v;document.querySelectorAll('#'+t.dataset.pick+'-pick .chip').forEach(b=>b.setAttribute('aria-pressed',b===t));s.dispatchEvent(new Event('change',{bubbles:true}));return}
   if(t.dataset.s){adjSign=+t.dataset.s;document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.s===adjSign));return}
   if(a==='accs')accSheet();
   else if(authAct(a,t))return;
+  else if(a==='pp')ppSheet(id);
+  else if(a==='ppuse')ppUseSheet(id);
+  else if(a==='ppusave')ppUseSave(id,t.dataset.rid,t);
+  else if(a==='ppudel'){if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();doneForm()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
+  else if(a==='ppdel'){const n=S.records.filter(r=>r.type==='ppu'&&r.pp===id).length;if(t.dataset.armed){S.records=S.records.filter(r=>!(r.type==='ppu'&&r.pp===id));S.records.forEach(r=>{if(r.ppid===id)delete r.ppid});S.prepaid=S.prepaid.filter(x=>x.id!==id);save();closeSheet()}else{t.dataset.armed='1';t.textContent=n?`再按一次確認：連同 ${n} 筆使用記錄一起刪除`:'再按一次確認刪除'}}
+  else if(a==='ovnew')ovpSheet(id);
+  else if(a==='ovoff')ovoSheet(id);
+  else if(a==='ovpsave')ovpSave(id,t.dataset.rid,t);
+  else if(a==='ovosave')ovoSave(id,t.dataset.rid,t);
+  else if(a==='ovdel'){const r0=S.records.find(x=>x.id===id);if(!r0)return;const cc=S.cards.find(x=>x.id===r0.card);if(t.dataset.armed){if(r0.type==='ovp'&&r2(cinfo(cc).ov-r0.amt)<0){$('#err').textContent='已經抵扣過一部分，請先刪除抵扣記錄。';return}S.records=S.records.filter(x=>x.id!==id);save();cardSheet(r0.card)}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
+  else if(a==='sort'){sortSec=sortSec===id?'':id;render()}
+  else if(a==='mvup'||a==='mvdn')moveItem(t.dataset.sec,id,a==='mvup'?-1:1);
+  else if(a==='spadd'){splits.push({who:'',amt:''});$('#split-wrap').innerHTML=splitHtml();{const pw=$('#pp-wrap');if(pw)pw.innerHTML=ppHtml()}const ins=document.querySelectorAll('#split-wrap [data-f="who"]');if(ins.length)ins[ins.length-1].focus()}
+  else if(a==='spdel'){splits.splice(+id,1);$('#split-wrap').innerHTML=splitHtml();{const pw=$('#pp-wrap');if(pw)pw.innerHTML=ppHtml()}}
+  else if(a==='speq'){const tt=totalAmt();if(!(tt>0)){$('#err').textContent='請先輸入總金額。';return}const n=splits.length+1,sh=Math.floor(tt/n*100)/100;splits.forEach(s=>{s.amt=sh});$('#split-wrap').innerHTML=splitHtml()}
   else if(a==='edit')editRec(id);
-  else if(a==='close')closeSheet();
+  else if(a==='close')doneForm();
   else if(a==='saverec')saveRec(id,t);
   else if(a==='addacc')addAcc();
   else if(a==='seen'){try{localStorage.setItem(SEEN,'1')}catch(x){}closeSheet();maybeSettle()}
   else if(a==='delrec'&&!t.dataset.armed&&pastRec(id)){t.dataset.armed='1';t.textContent='再按一次確認刪除';$('#err').textContent=WARN}
   else if(a==='delrec'){
-    if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();closeSheet()}
+    if(t.dataset.armed){delRec(id);save();doneForm()}
     else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
   else if(a==='xnew')xferSheet();
   else if(a==='xsave')xSave(id,t);
-  else if(a==='xdel'){if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();closeSheet()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
+  else if(a==='xdel'){if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();doneForm()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
   else if(a==='anew')advSheet('advo');
   else if(a==='advsave')advSave(t.dataset.t,id,t);
-  else if(a==='advdel'){if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();closeSheet()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
+  else if(a==='advdel'){if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();doneForm()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
   else if(a==='adv')advPerson(t.dataset.w,t.dataset.c);
   else if(a==='advrep'){const o=advSum().find(x=>x.who===t.dataset.w&&x.cur===t.dataset.c);advSheet(o&&o.v<0?'reps':'repr',null,{who:t.dataset.w,amt:o?Math.abs(o.v):'',date:today(),note:'',acc:'',cur:t.dataset.c})}
   else if(a==='advnew')advSheet('advo',null,{who:t.dataset.w,amt:'',date:today(),note:'',acc:'',cur:t.dataset.c});
@@ -769,10 +930,12 @@ document.addEventListener('click',e=>{
   else if(a==='rvldel'){if(t.dataset.armed){const v=S.reserves.find(x=>x.id===id);v.log=v.log.filter(l=>l.id!==t.dataset.lid);save();rsvSheet(id)}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
   else if(a==='rsvedit')rsvEdit(id);
   else if(a==='rsvupd'){const nm=$('#rv-name').value.trim();if(!nm){$('#err').textContent='請輸入項目名稱。';return}S.reserves.find(x=>x.id===id).name=nm;save();rsvSheet(id)}
-  else if(a==='rsvdel'){if(t.dataset.armed){const v=S.reserves.find(x=>x.id===id),ac=v.acc;S.records.forEach(r=>{if(r.rsv===id)r.rsv=''});S.reserves=S.reserves.filter(x=>x.id!==id);save();accDetail(ac)}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
+  else if(a==='rsvdel'){if(t.dataset.armed){const v=S.reserves.find(x=>x.id===id),ac=v.acc;S.records.forEach(r=>{if(r.rsv===id)r.rsv=''});S.reserves=S.reserves.filter(x=>x.id!==id);save();if(ac)accDetail(ac);else closeSheet()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
   else if(a==='rsv')rsvSheet(id);
-  else if(a==='rsvnew')rsvNew(id);
-  else if(a==='rsvsave')rsvSave(id);
+  else if(a==='rsvnew')rsvNew(id,t.dataset.c);
+  else if(a==='rsvsave')rsvSave(id,t.dataset.c);
+  else if(a==='rsvmove')rsvMoveSheet(id);
+  else if(a==='rsvmovego')rsvMoveGo(id);
   else if(a==='rvadd')rsvAct(id,'add');
   else if(a==='rvrel')rsvAct(id,'rel');
   else if(a==='rvuse')rsvAct(id,'use');
@@ -788,7 +951,7 @@ document.addEventListener('click',e=>{
   else if(a==='pay')paySheet(id);
   else if(a==='paysave')paySave(id,t.dataset.rid,t);
   else if(a==='paydel'&&!t.dataset.armed&&pastRec(id)){t.dataset.armed='1';t.textContent='再按一次確認刪除';$('#err').textContent=WARN}
-  else if(a==='paydel'){if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();closeSheet()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
+  else if(a==='paydel'){if(t.dataset.armed){const cid=(S.records.find(r=>r.id===id)||{}).card;S.records=S.records.filter(r=>r.id!==id);save();if(cid)cardSheet(cid);else closeSheet()}else{t.dataset.armed='1';t.textContent='再按一次確認刪除'}}
   else if(a==='adje')adjSheet(id,t.dataset.aid);
   else if(a==='bback')bSheet(id);
   else if(a==='adjsave')adjSave(id,t.dataset.aid,t);
@@ -809,7 +972,7 @@ document.addEventListener('click',e=>{
     else{t.dataset.armed='1';t.textContent=+t.dataset.n?`連同 ${t.dataset.n} 筆記錄一起刪除，再按一次確認`:'再按一次確認刪除'}}
   else if(a==='swdel'&&!t.dataset.armed&&pastRec(id)){t.dataset.armed='1';t.textContent='影響後續月份，再按一次確認'}
   else if(a==='swdel'){
-    if(t.dataset.armed){S.records=S.records.filter(r=>r.id!==id);save();render()}
+    if(t.dataset.armed){delRec(id);save();render()}
     else{t.dataset.armed='1';t.textContent='再按一次確認'}}
 });
 let justSwiped=0,sx=0,sy=0,cur=null,moved=false;
@@ -823,6 +986,7 @@ document.addEventListener('touchend',e=>{if(!cur)return;
   if(moved){const dx=e.changedTouches[0].clientX-sx;justSwiped=Date.now();
     if(dx<-40)cur.classList.add('open');else if(dx>40)closeSw(cur)}
   cur=null},{passive:true});
+document.addEventListener('input',e=>{const el=e.target;if(el&&el.dataset&&el.dataset.sp!==undefined){const s=splits[+el.dataset.sp];if(s){s[el.dataset.f]=el.value;const o=$('#sp-own');if(o)o.innerHTML=ownTxt()}}else if(el&&el.id==='f-amt'){const o=$('#sp-own');if(o)o.innerHTML=ownTxt()}});
 $('#scrim').addEventListener('click',()=>{if(!$('#sheet').dataset.lock)closeSheet()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#sheet').hidden&&!$('#sheet').dataset.lock)closeSheet()});
 drawAcct();render();notice();if($('#sheet').hidden)maybeSettle();initSync();
